@@ -76,6 +76,11 @@ fn main() {
              .long("background")
              .takes_value(false)
              .help("Run in background"))
+        .arg(clap::Arg::with_name("rates")
+             .short("r")
+             .long("rates")
+             .takes_value(false)
+             .help("Print rate info each second"))
         .get_matches();
 
     if std::env::var("RUST_LOG").is_err() {
@@ -142,9 +147,14 @@ fn main() {
         let address = format!("0.0.0.0:{}", port);
         info!("Starting {:?} server. Listening on {}.", protocol, address);
 
+        let mut packet_counts = vec![];
+        for i in 0..ncpus {
+            packet_counts.push(Arc::new(AtomicUsize::new(0)));
+        }
         let mut threadhandlers = vec![];
         for i in 0..ncpus {
             let addr = address.clone();
+            let pc: Arc<AtomicUsize> = packet_counts[i].clone();
             let thread = std::thread::spawn(move || {
                 //
                 // UDP
@@ -157,6 +167,7 @@ fn main() {
                     loop {
                         let (_len, src) = socket.recv_from(&mut buf).expect("recv_from");
                         debug!("{:02}: Got {:?} from {}", i, std::str::from_utf8(&buf), src);
+                        pc.fetch_add(1, Ordering::SeqCst);
                     }
                 }
                 //
@@ -168,6 +179,7 @@ fn main() {
                     let socket = builder.bind(addr).expect("bind");
                     let listener: TcpListener = socket.listen(BACKLOG).expect("listen");
                     for stream in listener.incoming() {
+                        let pc = pc.clone();
                         std::thread::spawn(move || {
                             debug!("{:02}: Got connection: {:?}", i, stream);
                             match stream {
@@ -185,6 +197,7 @@ fn main() {
                                                 debug!("{:02}: Client closed the connection", i);
                                                 break;
                                             }
+                                            pc.fetch_add(1, Ordering::SeqCst);
                                         } else {
                                             error!("{:02}: Reading from client", i);
                                             break;
@@ -199,6 +212,27 @@ fn main() {
             });
             threadhandlers.push(thread);
         }
+
+        if matches.is_present("rates") {
+            let thread = std::thread::spawn(move || {
+                let mut values = vec![0usize; ncpus];
+                let mut sum = 0usize;
+                loop {
+                    for i in 0..ncpus {
+                        let new_value = packet_counts[i].load(Ordering::Relaxed);
+                        let diff = new_value - values[i];
+                        print!("[{:?}] ", diff);
+                        sum += diff;
+                        values[i] = new_value;
+                    }
+                    println!(" ({})", sum);
+                    sum = 0;
+                    std::thread::sleep(std::time::Duration::from_millis(1000));
+                }
+            });
+            threadhandlers.push(thread);
+        }
+
         signal.recv().unwrap();
         info!("Received signal, exiting...");
     }
@@ -208,6 +242,11 @@ fn main() {
     // Run as client
     //
     if client && !server {
+
+        let mut packet_counts = vec![];
+        for i in 0..ncpus {
+            packet_counts.push(Arc::new(AtomicUsize::new(0)));
+        }
         let packets_send_count: usize = matches.value_of("packets").unwrap().parse::<usize>().unwrap_or_else(|e| {
             error!("Packets not valid number: {}", e);
             std::process::exit(1);
@@ -239,6 +278,7 @@ fn main() {
 
         let mut threadhandlers = vec![];
         for tid in 0..ncpus {
+            let pc: Arc<AtomicUsize> = packet_counts[tid].clone();
             let addr_vec = addresses.clone();
             let running = running.clone();
             let packets_sent_total = packets_sent_total.clone();
@@ -258,6 +298,7 @@ fn main() {
                         let socket = UdpSocket::bind("0.0.0.0:0").expect("bind");
                         while running.load(Ordering::SeqCst) && sent < packets_send_count {
                             packets_sent_total.fetch_add(1, Ordering::SeqCst);
+                            pc.fetch_add(1, Ordering::SeqCst);
                             sent += 1;
                             debug!("{:02}: Sending packet to {}", tid, addr);
                             socket.send_to("PING".as_bytes(), &addr).expect("send_to");
@@ -273,6 +314,7 @@ fn main() {
                             .connect(addr.clone()) {
                                 Ok(mut stream) => {
                                     while running.load(Ordering::SeqCst) && sent < packets_send_count {
+                                        pc.fetch_add(1, Ordering::SeqCst);
                                         packets_sent_total.fetch_add(1, Ordering::SeqCst);
                                         sent += 1;
                                         debug!("{:02}: Connected: {:?}", tid, stream);
@@ -298,6 +340,29 @@ fn main() {
             });
             threadhandlers.push(thread);
         }
+
+        if matches.is_present("rates") {
+            let running = running.clone();
+            let thread = std::thread::spawn(move || {
+                let mut values = vec![0usize; ncpus];
+                let mut sum = 0usize;
+                while running.load(Ordering::SeqCst) {
+                    print!("PPS: ");
+                    for i in 0..ncpus {
+                        let new_value = packet_counts[i].load(Ordering::Relaxed);
+                        let diff = new_value - values[i];
+                        print!("[{:?}] ", diff);
+                        sum += diff;
+                        values[i] = new_value;
+                    }
+                    println!(" ({})", sum);
+                    sum = 0;
+                    std::thread::sleep(std::time::Duration::from_millis(1000));
+                }
+            });
+            threadhandlers.push(thread);
+        }
+
         signal.recv().unwrap();
         info!("Received signal");
         running.store(false, Ordering::SeqCst);
