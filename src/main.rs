@@ -148,7 +148,7 @@ fn main() {
         info!("Starting {:?} server. Listening on {}.", protocol, address);
 
         let mut packet_counts = vec![];
-        for i in 0..ncpus {
+        for _ in 0..ncpus {
             packet_counts.push(Arc::new(AtomicUsize::new(0)));
         }
         let mut threadhandlers = vec![];
@@ -244,7 +244,7 @@ fn main() {
     if client && !server {
 
         let mut packet_counts = vec![];
-        for i in 0..ncpus {
+        for _ in 0..ncpus {
             packet_counts.push(Arc::new(AtomicUsize::new(0)));
         }
         let packets_send_count: usize = matches.value_of("packets").unwrap().parse::<usize>().unwrap_or_else(|e| {
