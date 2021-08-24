@@ -22,6 +22,9 @@ use std::thread;
 #[cfg(target_os = "linux")]
 const SO_REUSEPORT: i32 = libc::SO_REUSEPORT;
 
+#[cfg(target_os = "macos")]
+const SO_REUSEPORT: i32 = libc::SO_REUSEPORT;
+
 #[cfg(target_os = "freebsd")]
 const SO_REUSEPORT: i32 = 0x00010000; /* Use SO_REUSEPORT_LB */
 
