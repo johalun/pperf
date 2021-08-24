@@ -1,8 +1,8 @@
-extern crate chan_signal;
 extern crate clap;
 extern crate daemonize;
 extern crate env_logger;
 extern crate libc;
+extern crate signal_hook;
 #[macro_use]
 extern crate log;
 extern crate net2;
@@ -10,11 +10,14 @@ extern crate num_cpus;
 extern crate time;
 
 use net2::{TcpBuilder, UdpBuilder};
+use signal_hook::consts::signal::{SIGINT, SIGTERM};
 use std::io::{Read, Write};
 use std::net::{TcpListener, UdpSocket};
 use std::os::unix::io::AsRawFd;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::mpsc::channel;
 use std::sync::Arc;
+use std::thread;
 
 #[cfg(target_os = "linux")]
 const SO_REUSEPORT: i32 = libc::SO_REUSEPORT;
@@ -115,7 +118,7 @@ fn main() {
         }
     }
     env_logger::Builder::from_default_env()
-        .default_format_timestamp(false)
+        .format_timestamp(None)
         .init();
     debug!("Enabled debug output.");
 
@@ -129,7 +132,17 @@ fn main() {
     //
     // Common stuff
     //
-    let signal = chan_signal::notify(&[chan_signal::Signal::INT, chan_signal::Signal::TERM]);
+    let (signal_send, signal_recv) = channel();
+    let mut signals = signal_hook::iterator::Signals::new([SIGINT, SIGTERM])
+        .expect("Error creating signal hook");
+    thread::spawn(move || {
+        for signal in signals.forever() {
+            debug!("Caught signal {} in signal handler.", signal);
+            if signal_send.send(signal).is_err() {
+                break;
+            }
+        }
+    });
 
     let port: usize = matches
         .value_of("port")
@@ -263,7 +276,7 @@ fn main() {
             threadhandlers.push(thread);
         }
 
-        signal.recv().unwrap();
+        signal_recv.recv().unwrap();
         info!("Received signal, exiting...");
     }
 
@@ -407,7 +420,7 @@ fn main() {
             threadhandlers.push(thread);
         }
 
-        signal.recv().unwrap();
+        signal_recv.recv().unwrap();
         info!("Received signal");
         running.store(false, Ordering::SeqCst);
         for thread in threadhandlers {
