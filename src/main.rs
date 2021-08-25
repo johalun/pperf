@@ -39,7 +39,7 @@ enum Protocol {
 
 fn main() {
     let matches = clap::App::new("pperf")
-        .version("0.1.0")
+        .version("0.1.1")
         .author("Johannes Lundberg <johalun0@gmail.com>")
         .about("Iperf-like performance utility")
         .arg(
